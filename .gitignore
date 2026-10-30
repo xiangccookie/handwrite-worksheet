@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv*/
+venv*/
+
+# 打包产物（能重新生成，不入库）
+build/
+build_*/
+dist/
+dist_*/
+*.spec
+
+# 用户自己放的字体：绝对不要提交（第三方商业字体不能分发）
+字体/
+HandWrite字体/
+*.ttf
+*.otf
+*.ttc
+
+# 运行产物
+输出/
+outputs/
+*.log
+
+# 自检中间产物
+自检*.png
+自检*.txt
+
+# 凭据（禁止）
+.env
+*.token

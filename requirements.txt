@@ -1,0 +1,9 @@
+# 图像与数值
+numpy>=1.21
+Pillow>=9.0
+
+# 手写引擎
+# handright 声明 pillow<11，但实测 8.2.0 在 Pillow 12 下正常工作。
+# 如果 pip 因版本冲突拒绝安装，改用：
+#     pip install --no-deps handright==8.2.0
+handright==8.2.0
