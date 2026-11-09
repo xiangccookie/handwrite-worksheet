@@ -41,6 +41,27 @@ PAPER_KINDS = {
     "blank":   "素纸",
 }
 
+# 每种纸的底色与「边缘泛黄倍率」。
+# 实验记录纸 / 英语纸 / 方格纸 / 点阵纸本来就是**白纸**，不能跟着信纸一起泛黄；
+# 只有信纸和素纸保留米黄（那是信笺的手感）。
+PAPER_STYLE = {
+    "ruled":   ((250, 247, 238), 1.00),   # 信纸：米黄
+    "blank":   ((250, 247, 238), 1.00),
+    "english": ((253, 253, 251), 0.22),   # 白纸
+    "grid":    ((253, 253, 251), 0.22),
+    "dots":    ((253, 253, 251), 0.22),
+    "lab":     ((254, 254, 253), 0.12),   # 实验记录纸：最白
+}
+
+
+def paper_style(paper, override=None):
+    """返回 (底色 RGB, 泛黄倍率)。override 给了（"--paper-color 255,255,255"）就用它当底色。"""
+    rgb, scale = PAPER_STYLE.get(paper, PAPER_STYLE["ruled"])
+    if override is not None:
+        rgb = tuple(int(v) for v in override)
+    return rgb, scale
+
+
 RULE      = (174, 192, 212)
 RULE_EN   = (150, 175, 205)
 RULE_BASE = (118, 148, 190)
@@ -212,7 +233,7 @@ def ink_rows(alpha_np, thresh=0.02, merge_frac=0.50, pitch=None):
 
 def write_on_paper(text, out_png, font_path, *, dpi=300, width_mm=148.0, margin_mm=16.0,
                    size_pt=11.5, line_spacing=1.75, paper="ruled", aged=1.0, seed=7,
-                   ink_rgb=(24, 26, 36), wobble=0.45, ss=2):
+                   ink_rgb=(24, 26, 36), wobble=0.45, ss=2, paper_color=None):
     """渲染一张成品图。返回字典（含输出路径、像素尺寸、行数、画了几条线）。"""
     from handright import Template, handwrite
 
@@ -278,7 +299,9 @@ def write_on_paper(text, out_png, font_path, *, dpi=300, width_mm=148.0, margin_
     alpha_big = alpha_tall.crop((0, 0, W * ss, Hh * ss))
     rows = ink_rows(np.asarray(alpha_big), merge_frac=0.35, pitch=line_h * ss)
 
-    paper_arr, fiber = hw.make_paper(W, Hh, rng_np, paper_rgb=(250, 247, 238), aged=aged)
+    base_rgb, aged_scale = paper_style(paper, paper_color)   # 白纸就白，信纸才米黄
+    paper_arr, fiber = hw.make_paper(W, Hh, rng_np, paper_rgb=base_rgb,
+                                     aged=aged * aged_scale)
     alpha = alpha_big.resize((W, Hh), Image.LANCZOS)
     a = np.asarray(alpha, np.float32) / 255.0
     a = np.clip(a * (0.86 + 0.14 * fiber), 0, 1)[..., None]
@@ -297,7 +320,7 @@ FONT_DIR = "HandWrite字体"
 
 def write_pages(text, out_prefix, font_path, *, dpi=300, width_mm=148.0, height_mm=210.0,
                 margin_mm=16.0, size_pt=11.5, line_spacing=1.75, paper="ruled", aged=1.0,
-                seed=7, ink_rgb=(24, 26, 36), wobble=0.45, ss=2):
+                seed=7, ink_rgb=(24, 26, 36), wobble=0.45, ss=2, paper_color=None):
     """长文分页：按 A5（或指定尺寸）逐页排版，每页都让字坐在横线上。
 
     做法：先在一块超高画布上把**整篇**渲染出来（这样行距全局一致、不会在页边界重排），
@@ -382,7 +405,9 @@ def write_pages(text, out_prefix, font_path, *, dpi=300, width_mm=148.0, height_
 
         # 本页第一行墨迹的底边（页面坐标），作为横线网格锚点
         ch_rows = ink_rows(np.asarray(page_alpha), merge_frac=0.35, pitch=pitch_ss)
-        paper_arr, fiber = hw.make_paper(W, Hp, rng_np, paper_rgb=(250, 247, 238), aged=aged)
+        base_rgb, aged_scale = paper_style(paper, paper_color)
+        paper_arr, fiber = hw.make_paper(W, Hp, rng_np, paper_rgb=base_rgb,
+                                         aged=aged * aged_scale)
         alpha = page_alpha.resize((W, Hp), Image.LANCZOS)
         a = np.asarray(alpha, np.float32) / 255.0
         a = np.clip(a * (0.86 + 0.14 * fiber), 0, 1)[..., None]
@@ -418,6 +443,8 @@ def main(argv=None):
     p.add_argument("--margin-mm", type=float, default=16.0)
     p.add_argument("--dpi", type=int, default=300)
     p.add_argument("--aged", type=float, default=1.0, help="边缘泛黄强度，0=新纸")
+    p.add_argument("--paper-color", default=None,
+                   help="强制指定纸底色 R,G,B（如 255,255,255 = 纯白）；不写则按纸型自动")
     p.add_argument("--wobble", type=float, default=0.45, help="笔画抖动强度")
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--paper", default="ruled", choices=list(PAPER_KINDS),
@@ -437,14 +464,18 @@ def main(argv=None):
                            width_mm=a.width_mm, height_mm=a.height_mm,
                            margin_mm=a.margin_mm, size_pt=a.size,
                            line_spacing=a.line_spacing, paper=("blank" if a.no_ruled else a.paper),
-                           aged=a.aged, seed=a.seed, wobble=a.wobble)
+                           aged=a.aged, seed=a.seed, wobble=a.wobble,
+                           paper_color=(tuple(int(v) for v in a.paper_color.split(","))
+                                        if a.paper_color else None))
         print(info)
         return info
 
     info = write_on_paper(text, a.out, a.font, dpi=a.dpi, width_mm=a.width_mm,
                           margin_mm=a.margin_mm, size_pt=a.size,
                           line_spacing=a.line_spacing, paper=("blank" if a.no_ruled else a.paper),
-                          aged=a.aged, seed=a.seed, wobble=a.wobble)
+                          aged=a.aged, seed=a.seed, wobble=a.wobble,
+                          paper_color=(tuple(int(v) for v in a.paper_color.split(","))
+                                       if a.paper_color else None))
     print(info)
     return info
 
