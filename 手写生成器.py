@@ -24,7 +24,17 @@ from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageTk
 
 # ---------------------------------------------------------------- 路径与常量
-APP_TITLE = "手写生成器 · 信纸手写稿"
+APP_TITLE = "手写生成器 · 手写稿"
+
+# 纸型：(界面显示名, paper_write.py 里的键)
+PAPER_OPTIONS = [
+    ("横线信纸", "ruled"),
+    ("英语四线三格", "english"),
+    ("方格纸", "grid"),
+    ("点阵纸", "dots"),
+    ("实验记录纸", "lab"),
+    ("素纸", "blank"),
+]
 APP_VERSION = "1.0"
 
 BG      = "#F2EFE8"      # 窗口底色（接近米白纸）
@@ -275,8 +285,8 @@ class App(tk.Tk):
         self.log_path = log_path
         self.title(f"{APP_TITLE}  v{APP_VERSION}")
         self.configure(bg=BG)
-        self.geometry("1180x780")
-        self.minsize(1040, 700)
+        self.geometry("1180x840")
+        self.minsize(1060, 760)
 
         self.out_dir = pick_out_dir()
         self.pages: list[str] = []
@@ -302,7 +312,7 @@ class App(tk.Tk):
         # 标题
         tk.Label(left, text="手写生成器", bg=BG, fg=INK,
                  font=("Microsoft YaHei UI", 17, "bold")).pack(anchor="w")
-        tk.Label(left, text="把文字写成手写字体 + 信纸的图片与 PDF",
+        tk.Label(left, text="手写字体 + 六种纸型（信纸 / 英语四线三格 / 方格 / 点阵 / 实验记录 / 素纸）",
                  bg=BG, fg=SUB, font=("Microsoft YaHei UI", 9)).pack(anchor="w", pady=(2, 12))
 
         # 文字输入
@@ -359,10 +369,15 @@ class App(tk.Tk):
 
         # 选项
         opt = tk.Frame(left, bg=BG); opt.pack(fill="x", pady=(0, 10))
-        self.var_ruled = tk.BooleanVar(value=True)
-        tk.Checkbutton(opt, text="画横线", variable=self.var_ruled, bg=BG, fg=INK,
-                       activebackground=BG, selectcolor=PANEL, bd=0, highlightthickness=0,
-                       font=("Microsoft YaHei UI", 9)).pack(side="left")
+        tk.Label(opt, text="纸型", bg=BG, fg=INK,
+                 font=("Microsoft YaHei UI", 9)).pack(side="left")
+        self.paper_var = tk.StringVar(value=PAPER_OPTIONS[0][0])
+        self.paper_box = ttk.Combobox(opt, textvariable=self.paper_var,
+                                      values=[n for n, _ in PAPER_OPTIONS],
+                                      state="readonly", width=13,
+                                      font=("Microsoft YaHei UI", 9),
+                                      style="Hand.TCombobox")
+        self.paper_box.pack(side="left", padx=(8, 16))
         self.var_pages = tk.BooleanVar(value=True)
         tk.Checkbutton(opt, text="长文分页（A5）", variable=self.var_pages, bg=BG, fg=INK,
                        activebackground=BG, selectcolor=PANEL, bd=0, highlightthickness=0,
@@ -457,7 +472,7 @@ class App(tk.Tk):
                     line_spacing=round(self.sl_ls.get(), 2),
                     wobble=round(self.sl_wo.get(), 2),
                     margin_mm=int(round(self.sl_mg.get())),
-                    ruled=bool(self.var_ruled.get()),
+                    paper=dict(PAPER_OPTIONS)[self.paper_var.get()],
                     pages=bool(self.var_pages.get()))
 
     # -- 生成（后台线程，避免界面卡死）----------------------------------
@@ -493,7 +508,7 @@ class App(tk.Tk):
                 info = pw.write_pages(text, os.path.join(out_dir, "手写稿"), p["font_path"],
                                       size_pt=p["size_pt"], line_spacing=p["line_spacing"],
                                       wobble=p["wobble"], margin_mm=p["margin_mm"],
-                                      ruled=p["ruled"])
+                                      paper=p["paper"])
                 files = [x["file"] for x in info["pages"]]
                 q.put(("ok", files, info))
             else:
@@ -501,7 +516,7 @@ class App(tk.Tk):
                 info = pw.write_on_paper(text, fn, p["font_path"],
                                          size_pt=p["size_pt"], line_spacing=p["line_spacing"],
                                          wobble=p["wobble"], margin_mm=p["margin_mm"],
-                                         ruled=p["ruled"])
+                                         paper=p["paper"])
                 q.put(("ok", [info["file"]], info))
         except Exception:
             q.put(("err", traceback.format_exc(), None))

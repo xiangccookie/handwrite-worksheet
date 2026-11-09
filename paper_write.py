@@ -31,6 +31,141 @@ from PIL import Image, ImageDraw, ImageFont
 # 张维镜手写楷书还缺「」和 —。这里做最小替换，避免出现空白字。
 SUBST = {"〇": "零", "「": "“", "」": "”", "—": "－"}
 
+# ---------------------------- 纸型 ----------------------------
+PAPER_KINDS = {
+    "ruled":   "横线信纸",
+    "english": "英语四线三格",
+    "grid":    "方格纸",
+    "dots":    "点阵纸",
+    "lab":     "实验记录纸",
+    "blank":   "素纸",
+}
+
+RULE      = (174, 192, 212)
+RULE_EN   = (150, 175, 205)
+RULE_BASE = (118, 148, 190)
+RED_LINE  = (186, 84, 72)
+GRID      = (188, 205, 222)
+LABEL_FONTS = [r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\simhei.ttf"]
+
+
+def _label_font(px):
+    """表头文字用系统字体（打包时不必额外带字体）。"""
+    for fp in LABEL_FONTS:
+        if os.path.isfile(fp):
+            try:
+                return ImageFont.truetype(fp, max(8, int(px)))
+            except Exception:
+                continue
+    return ImageFont.load_default()
+
+
+def _cjk_advance(font_path, size_px):
+    """量这个字体在指定字号下，一个汉字的真实**前进宽度**（advance）。
+
+    方格纸必须用它当格边长：手写体的 advance 并不等于字号（有的 1.02 倍、有的 0.96 倍），
+    差一点点，写十来个字就累积出一个格子的错位，看着就是“字没落进格子”。
+    """
+    try:
+        f = ImageFont.truetype(font_path, max(8, int(round(size_px))))
+        return float(f.getlength("永"))
+    except Exception:
+        return float(size_px)
+
+
+def paper_metrics(paper, size_px, line_spacing):
+    """返回 (line_h, header_h)。不同纸型行距口径不同，必须分开算：
+      · 方格纸：一格一个字，格边长≈字高；
+      · 英语四线三格：三格算一行，字站在第 3 条线上，往上 2 格正好是字高；
+      · 实验记录纸：顶部要让出表头。
+    """
+    if paper == "grid":
+        return size_px, 0.0          # 格边长 = 字宽，字才落得进格子
+    if paper == "english":
+        return size_px * 1.5, size_px * 0.8   # 第二项是顶部额外留白（让第一组的上线不被切）
+    lh = size_px * line_spacing
+    if paper == "lab":
+        return lh, lh * 3.0
+    return lh, 0.0
+
+
+def draw_lab_header(d, W, mx, header_h, size_px):
+    """实验记录纸表头：外框 + 标题 + 四个填写栏。"""
+    x0, x1 = mx, W - mx
+    y0, y1 = int(mx * 0.55), int(header_h * 0.90)
+    f_t = _label_font(size_px * 0.62)
+    f_f = _label_font(size_px * 0.46)
+    d.rectangle([x0, y0, x1, y1], outline=RULE_BASE, width=2)
+    mid = y0 + int((y1 - y0) * 0.46)
+    d.line([(x0, mid), (x1, mid)], fill=RULE_BASE, width=2)
+    d.text(((x0 + x1) / 2, (y0 + mid) / 2), "实 验 记 录",
+           font=f_t, fill=(92, 112, 142), anchor="mm")
+    labels = ["实验名称", "日期", "记录人", "第    页"]
+    cw = int((x1 - x0) // len(labels))
+    for i, lab in enumerate(labels):
+        cx = x0 + i * cw
+        if i:
+            d.line([(cx, mid), (cx, y1)], fill=RULE_BASE, width=1)
+        d.text((cx + 10, (mid + y1) / 2), lab, font=f_f,
+               fill=(122, 140, 168), anchor="lm")
+    return 1 + len(labels)
+
+
+def draw_paper(img, paper, W, H, mx, first_baseline, line_h, size_px, header_h=0.0):
+    """按纸型画装饰，全部锚定到第一行基线 —— 所以字一定坐在线上。"""
+    if paper == "blank":
+        return 0
+    d = ImageDraw.Draw(img)
+    x_l, x_r = mx - 34, W - mx + 24
+    n = 0
+    if paper in ("ruled", "lab"):
+        y = first_baseline
+        while y < H - mx * 0.35:
+            d.line([(x_l, int(y) + 3), (x_r, int(y) + 3)], fill=RULE, width=2)
+            n += 1
+            y += line_h
+        top = (header_h + mx * 0.7) if paper == "lab" else int(H * 0.04)
+        d.line([(int(mx * 0.72), int(top)), (int(mx * 0.72), int(H * 0.96))],
+               fill=RED_LINE, width=2)
+        if paper == "lab":
+            n += draw_lab_header(d, W, mx, header_h, size_px)
+    elif paper == "english":
+        g = line_h / 3.0
+        y = first_baseline
+        while y - 2 * g < H - mx * 0.3:
+            for dy, wd, col in ((-2 * g, 1, RULE_EN), (-g, 1, RULE_EN),
+                                (0.0, 2, RULE_BASE), (g, 1, RULE_EN)):
+                yy = y + dy
+                if mx * 0.35 < yy < H - mx * 0.25:
+                    d.line([(x_l, int(yy)), (x_r, int(yy))], fill=col, width=wd)
+            n += 1
+            y += line_h
+    elif paper in ("grid", "dots"):
+        cell = line_h
+        # 从**页顶**向上对齐到离基线最近的那条格线：用 ceil 而不是 floor，
+        # 否则当“基线 y”小于左边距时 floor 会取到负值，格线反而被推到文字下方。
+        top_ref = mx * 0.45
+        n_up = int(np.ceil((first_baseline - top_ref) / cell))
+        y_start = first_baseline - max(0, n_up) * cell
+        if paper == "grid":
+            x = mx
+            while x <= W - mx + 1:
+                d.line([(int(x), int(y_start)), (int(x), H - mx // 2)],
+                       fill=GRID, width=1)
+                x += cell
+        y = y_start
+        while y < H - mx * 0.3:
+            if paper == "grid":
+                d.line([(mx, int(y)), (W - mx, int(y))], fill=GRID, width=1)
+            else:
+                x = mx
+                while x <= W - mx:
+                    d.ellipse([x - 2, y - 2, x + 2, y + 2], fill=(150, 165, 185))
+                    x += cell
+            n += 1
+            y += cell
+    return n
+
 
 def _load_handwrite():
     here = os.path.dirname(os.path.abspath(__file__))
@@ -76,9 +211,9 @@ def ink_rows(alpha_np, thresh=0.02, merge_frac=0.50, pitch=None):
 
 
 def write_on_paper(text, out_png, font_path, *, dpi=300, width_mm=148.0, margin_mm=16.0,
-                   size_pt=11.5, line_spacing=1.75, ruled=True, aged=1.0, seed=7,
+                   size_pt=11.5, line_spacing=1.75, paper="ruled", aged=1.0, seed=7,
                    ink_rgb=(24, 26, 36), wobble=0.45, ss=2):
-    """渲染一张成品图。返回字典（含输出路径、像素尺寸、行数、横线条数）。"""
+    """渲染一张成品图。返回字典（含输出路径、像素尺寸、行数、画了几条线）。"""
     from handright import Template, handwrite
 
     hw = _load_handwrite()
@@ -91,7 +226,14 @@ def write_on_paper(text, out_png, font_path, *, dpi=300, width_mm=148.0, margin_
     W = int(round(width_mm * ppm))
     mx = int(round(margin_mm * ppm))
     size_px = size_pt * dpi / 72.0
-    line_h = size_px * line_spacing
+    line_h, header_h = paper_metrics(paper, size_px, line_spacing)
+    grid_ws = 0.0
+    if paper == "grid":
+        # 格边长取「字号」与「单字真实宽度」中较大的一个（handright 要求 line_spacing ≥ 字号），
+        # 再用 word_spacing 把差额补上，让每个字正好占一格 —— 否则手写体偏窄，越写越往左偏。
+        adv = _cjk_advance(font_path, size_px)
+        line_h = max(size_px, adv) * 1.02
+        grid_ws = max(0.0, line_h - adv)
 
     # 缩进只加在**段落开头**。之前给每一行都加（包括折行产生的续行），
     # 结果每行多两个字 → handright 二次折行 → 冒出孤立单字。
@@ -104,7 +246,7 @@ def write_on_paper(text, out_png, font_path, *, dpi=300, width_mm=148.0, margin_
     for p in paras:
         if p.strip():
             est += int(len(p) * size_px * 1.02 / text_w)
-    H_tall = int(size_px * 1.2 + max(4, est) * line_h * 1.4 + mx * 2)
+    H_tall = int(header_h + size_px * 1.2 + max(4, est) * line_h * 1.4 + mx * 2)
 
     s = max(0.15, size_px * ss / 60.0) * wobble
     tpl = Template(
@@ -113,8 +255,8 @@ def write_on_paper(text, out_png, font_path, *, dpi=300, width_mm=148.0, margin_
         line_spacing=line_h * ss,
         fill=(0, 0, 0, 255),
         left_margin=mx * ss, right_margin=mx * ss,
-        top_margin=size_px * 0.9 * ss, bottom_margin=0,
-        word_spacing=0.0,
+        top_margin=(header_h + size_px * 0.9) * ss, bottom_margin=0,
+        word_spacing=grid_ws * ss,
         line_spacing_sigma=0.0,          # ← 归零：行行等距，才能对上线
         font_size_sigma=2.0 * s,
         word_spacing_sigma=2.0 * s,
@@ -129,42 +271,32 @@ def write_on_paper(text, out_png, font_path, *, dpi=300, width_mm=148.0, margin_
         print(f"[提示] 内容超出画布被分成 {len(pages)} 页，这里只取第 1 页。", file=sys.stderr)
     alpha_tall = pages[0].getchannel("A")
 
-    rows = ink_rows(np.asarray(alpha_tall), pitch=line_h * ss)
+    rows = ink_rows(np.asarray(alpha_tall), merge_frac=0.35, pitch=line_h * ss)
     if not rows:
         raise RuntimeError("没渲染出任何文字，检查字体是否含这些字")
-    Hh = int(rows[-1][1] / ss) + int(mx * 0.9)
+    Hh = int(rows[-1][1] / ss) + int(6 * line_h) + int(mx * 0.5)   # 底部多铺 6 行
     alpha_big = alpha_tall.crop((0, 0, W * ss, Hh * ss))
-    rows = ink_rows(np.asarray(alpha_big), pitch=line_h * ss)
+    rows = ink_rows(np.asarray(alpha_big), merge_frac=0.35, pitch=line_h * ss)
 
-    paper, fiber = hw.make_paper(W, Hh, rng_np, paper_rgb=(250, 247, 238), aged=aged)
+    paper_arr, fiber = hw.make_paper(W, Hh, rng_np, paper_rgb=(250, 247, 238), aged=aged)
     alpha = alpha_big.resize((W, Hh), Image.LANCZOS)
     a = np.asarray(alpha, np.float32) / 255.0
     a = np.clip(a * (0.86 + 0.14 * fiber), 0, 1)[..., None]
     ink = np.array(ink_rgb, np.float32) / 255.0
-    img = Image.fromarray((np.clip(paper * (1 - a) + ink[None, None, :] * a, 0, 1) * 255)
+    img = Image.fromarray((np.clip(paper_arr * (1 - a) + ink[None, None, :] * a, 0, 1) * 255)
                           .astype(np.uint8), "RGB")
 
-    n_rules = 0
-    if ruled and rows:
-        d = ImageDraw.Draw(img)
-        y = rows[0][1] / ss                       # 第一行的底边 = 网格锚点
-        while y < Hh - mx * 0.35:
-            d.line([(mx - 34, int(y) + 3), (W - mx + 24, int(y) + 3)],
-                   fill=(174, 192, 212), width=2)
-            n_rules += 1
-            y += line_h
-        d.line([(int(mx * 0.72), int(Hh * 0.04)), (int(mx * 0.72), int(Hh * 0.96))],
-               fill=(186, 84, 72), width=2)
+    n_rules = draw_paper(img, paper, W, Hh, mx, rows[0][1] / ss, line_h, size_px, header_h)
     img.save(out_png, dpi=(dpi, dpi))
-    return {"file": out_png, "px": f"{W}x{Hh}", "ink_rows": len(rows),
-            "rules": n_rules, "size_px": int(size_px), "line_h": round(line_h, 1)}
+    return {"file": out_png, "px": f"{W}x{Hh}", "ink_rows": len(rows), "paper": paper,
+            "lines_drawn": n_rules, "size_px": int(size_px), "line_h": round(line_h, 1)}
 
 
 FONT_DIR = "HandWrite字体"
 
 
 def write_pages(text, out_prefix, font_path, *, dpi=300, width_mm=148.0, height_mm=210.0,
-                margin_mm=16.0, size_pt=11.5, line_spacing=1.75, ruled=True, aged=1.0,
+                margin_mm=16.0, size_pt=11.5, line_spacing=1.75, paper="ruled", aged=1.0,
                 seed=7, ink_rgb=(24, 26, 36), wobble=0.45, ss=2):
     """长文分页：按 A5（或指定尺寸）逐页排版，每页都让字坐在横线上。
 
@@ -183,7 +315,14 @@ def write_pages(text, out_prefix, font_path, *, dpi=300, width_mm=148.0, height_
     Hp = int(round(height_mm * ppm))
     mx = int(round(margin_mm * ppm))
     size_px = size_pt * dpi / 72.0
-    line_h = size_px * line_spacing
+    line_h, header_h = paper_metrics(paper, size_px, line_spacing)
+    grid_ws = 0.0
+    if paper == "grid":
+        # 格边长取「字号」与「单字真实宽度」中较大的一个（handright 要求 line_spacing ≥ 字号），
+        # 再用 word_spacing 把差额补上，让每个字正好占一格 —— 否则手写体偏窄，越写越往左偏。
+        adv = _cjk_advance(font_path, size_px)
+        line_h = max(size_px, adv) * 1.02
+        grid_ws = max(0.0, line_h - adv)
 
     paras = text.split("\n")
     body = "\n".join(("　　" + p if p.strip() else "") for p in paras)
@@ -192,7 +331,7 @@ def write_pages(text, out_prefix, font_path, *, dpi=300, width_mm=148.0, height_
     for p in paras:
         if p.strip():
             est += int(len(p) * size_px * 1.02 / text_w)
-    H_tall = int(size_px * 1.2 + max(6, est) * line_h * 1.5 + mx * 2)
+    H_tall = int(header_h + size_px * 1.2 + max(6, est) * line_h * 1.5 + mx * 2)
 
     s = max(0.15, size_px * ss / 60.0) * wobble
     tpl = Template(
@@ -200,7 +339,7 @@ def write_pages(text, out_prefix, font_path, *, dpi=300, width_mm=148.0, height_
         font=ImageFont.truetype(font_path, int(size_px * ss), index=0),
         line_spacing=line_h * ss, fill=(0, 0, 0, 255),
         left_margin=mx * ss, right_margin=mx * ss,
-        top_margin=size_px * 0.9 * ss, bottom_margin=0, word_spacing=0.0,
+        top_margin=(header_h + size_px * 0.9) * ss, bottom_margin=0, word_spacing=grid_ws * ss,
         line_spacing_sigma=0.0,
         font_size_sigma=2.0 * s, word_spacing_sigma=2.0 * s,
         perturb_x_sigma=2.6 * s, perturb_y_sigma=2.6 * s,
@@ -222,12 +361,12 @@ def write_pages(text, out_prefix, font_path, *, dpi=300, width_mm=148.0, height_
     base = rows[0][1]                                   # 第一行墨迹的底边（ss 坐标）
     n_lines = int(round((rows[-1][1] - base) / pitch_ss)) + 1
 
-    content_ss = (Hp - 2 * mx) * ss                     # 每页可用高度（ss）
+    content_ss = (Hp - 2 * mx - header_h) * ss          # 每页可用高度（扣掉表头）
     L = max(1, int(content_ss // pitch_ss))             # 每页行数
     n_pages = int(np.ceil(n_lines / L))
 
     out_files = []
-    top_ss = mx * ss
+    top_ss = int((mx + header_h) * ss)
     for p in range(n_pages):
         # 切口落在两行中间，避免切断任何一行
         y_from = int(round(base + (p * L - 0.5) * pitch_ss))
@@ -242,34 +381,25 @@ def write_pages(text, out_prefix, font_path, *, dpi=300, width_mm=148.0, height_
         page_alpha.paste(chunk, (0, top_ss))
 
         # 本页第一行墨迹的底边（页面坐标），作为横线网格锚点
-        ch_rows = ink_rows(np.asarray(page_alpha), pitch=pitch_ss)
-        paper, fiber = hw.make_paper(W, Hp, rng_np, paper_rgb=(250, 247, 238), aged=aged)
+        ch_rows = ink_rows(np.asarray(page_alpha), merge_frac=0.35, pitch=pitch_ss)
+        paper_arr, fiber = hw.make_paper(W, Hp, rng_np, paper_rgb=(250, 247, 238), aged=aged)
         alpha = page_alpha.resize((W, Hp), Image.LANCZOS)
         a = np.asarray(alpha, np.float32) / 255.0
         a = np.clip(a * (0.86 + 0.14 * fiber), 0, 1)[..., None]
         ink = np.array(ink_rgb, np.float32) / 255.0
-        img = Image.fromarray((np.clip(paper * (1 - a) + ink[None, None, :] * a, 0, 1) * 255)
+        img = Image.fromarray((np.clip(paper_arr * (1 - a) + ink[None, None, :] * a, 0, 1) * 255)
                               .astype(np.uint8), "RGB")
 
         n_rules = 0
-        if ruled and ch_rows:
-            d = ImageDraw.Draw(img)
-            anchor = ch_rows[0][1] / ss
-            v = anchor - ((anchor - mx * 0.6) // line_h) * line_h
-            while v < Hp - mx * 0.4:
-                if v > mx * 0.4:
-                    d.line([(mx - 34, int(v) + 3), (W - mx + 24, int(v) + 3)],
-                           fill=(174, 192, 212), width=2)
-                    n_rules += 1
-                v += line_h
-            d.line([(int(mx * 0.72), mx), (int(mx * 0.72), Hp - mx)],
-                   fill=(186, 84, 72), width=2)
+        if ch_rows:
+            n_rules = draw_paper(img, paper, W, Hp, mx, ch_rows[0][1] / ss,
+                                 line_h, size_px, header_h)
 
         fn = f"{out_prefix}_{p + 1}.png"
         img.save(fn, dpi=(dpi, dpi))
-        out_files.append({"file": fn, "px": f"{W}x{Hp}", "rules": n_rules})
+        out_files.append({"file": fn, "px": f"{W}x{Hp}", "lines_drawn": n_rules})
 
-    return {"pages": out_files, "total_lines": n_lines, "lines_per_page": L}
+    return {"pages": out_files, "total_lines": n_lines, "lines_per_page": L, "paper": paper}
 
 
 def main(argv=None):
@@ -290,7 +420,9 @@ def main(argv=None):
     p.add_argument("--aged", type=float, default=1.0, help="边缘泛黄强度，0=新纸")
     p.add_argument("--wobble", type=float, default=0.45, help="笔画抖动强度")
     p.add_argument("--seed", type=int, default=7)
-    p.add_argument("--no-ruled", action="store_true", help="不画横线（素纸）")
+    p.add_argument("--paper", default="ruled", choices=list(PAPER_KINDS),
+                   help="纸型：" + "、".join(f"{k}={v}" for k, v in PAPER_KINDS.items()))
+    p.add_argument("--no-ruled", action="store_true", help="等同 --paper blank（素纸）")
     a = p.parse_args(argv)
 
     if a.text is not None:
@@ -304,14 +436,14 @@ def main(argv=None):
         info = write_pages(text, a.out.replace(".png", ""), a.font, dpi=a.dpi,
                            width_mm=a.width_mm, height_mm=a.height_mm,
                            margin_mm=a.margin_mm, size_pt=a.size,
-                           line_spacing=a.line_spacing, ruled=not a.no_ruled,
+                           line_spacing=a.line_spacing, paper=("blank" if a.no_ruled else a.paper),
                            aged=a.aged, seed=a.seed, wobble=a.wobble)
         print(info)
         return info
 
     info = write_on_paper(text, a.out, a.font, dpi=a.dpi, width_mm=a.width_mm,
                           margin_mm=a.margin_mm, size_pt=a.size,
-                          line_spacing=a.line_spacing, ruled=not a.no_ruled,
+                          line_spacing=a.line_spacing, paper=("blank" if a.no_ruled else a.paper),
                           aged=a.aged, seed=a.seed, wobble=a.wobble)
     print(info)
     return info
