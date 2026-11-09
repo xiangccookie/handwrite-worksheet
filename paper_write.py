@@ -39,6 +39,7 @@ PAPER_KINDS = {
     "dots":    "点阵纸",
     "lab":     "实验记录纸",
     "blank":   "素纸",
+    "white":   "白纸",
 }
 
 # 每种纸的底色与「边缘泛黄倍率」。
@@ -51,6 +52,7 @@ PAPER_STYLE = {
     "grid":    ((253, 253, 251), 0.22),
     "dots":    ((253, 253, 251), 0.22),
     "lab":     ((254, 254, 253), 0.12),   # 实验记录纸：最白
+    "white":   ((255, 255, 255), 0.03),   # 纯白纸：几乎不做旧
 }
 
 
@@ -134,22 +136,22 @@ def draw_lab_header(d, W, mx, header_h, size_px):
 
 def draw_paper(img, paper, W, H, mx, first_baseline, line_h, size_px, header_h=0.0):
     """按纸型画装饰，全部锚定到第一行基线 —— 所以字一定坐在线上。"""
-    if paper == "blank":
+    if paper in ("blank", "white"):
         return 0
     d = ImageDraw.Draw(img)
     x_l, x_r = mx - 34, W - mx + 24
     n = 0
-    if paper in ("ruled", "lab"):
+    if paper == "ruled":
         y = first_baseline
         while y < H - mx * 0.35:
             d.line([(x_l, int(y) + 3), (x_r, int(y) + 3)], fill=RULE, width=2)
             n += 1
             y += line_h
-        top = (header_h + mx * 0.7) if paper == "lab" else int(H * 0.04)
-        d.line([(int(mx * 0.72), int(top)), (int(mx * 0.72), int(H * 0.96))],
+        d.line([(int(mx * 0.72), int(H * 0.04)), (int(mx * 0.72), int(H * 0.96))],
                fill=RED_LINE, width=2)
-        if paper == "lab":
-            n += draw_lab_header(d, W, mx, header_h, size_px)
+    elif paper == "lab":
+        # 实验记录纸：只画表头，**不画横线、不画红色竖线** —— 书写区保持干净
+        n += draw_lab_header(d, W, mx, header_h, size_px)
     elif paper == "english":
         g = line_h / 3.0
         y = first_baseline

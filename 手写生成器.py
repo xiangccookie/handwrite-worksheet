@@ -34,6 +34,7 @@ PAPER_OPTIONS = [
     ("点阵纸", "dots"),
     ("实验记录纸", "lab"),
     ("素纸", "blank"),
+    ("白纸", "white"),
 ]
 APP_VERSION = "1.0"
 
